@@ -216,13 +216,36 @@ def segment_video(converts_file_path: str, segment_save_file_path: str, segment_
         logger.error(f'An unknown error occurred: {e}')
 
 
+def get_segment_files(segment_path_template: str) -> list:
+    """列出某次分段录制真正产生的源文件。
+
+    segment_path_template 形如 ".../主播_2026-01-01_20-00-00_%03d.ts"。
+    原实现用 `prefix in path` 在整个目录里模糊匹配，会把同名的、已经转好的
+    .mp4 也匹配进来，于是 converts_mp4 拿 X_000.mp4 去转出 X_000.mp4,
+    输入输出同名导致转码失败(并可能误删已转好的文件)。这里改为严格匹配
+    文件名前缀 + 原始扩展名。
+    """
+    directory = os.path.dirname(segment_path_template)
+    basename = os.path.basename(segment_path_template)
+    prefix = basename.rsplit('_', maxsplit=1)[0] + '_'
+    extension = '.' + basename.rsplit('.', maxsplit=1)[-1]
+    matched = []
+    for path in utils.get_file_paths(directory):
+        name = os.path.basename(path)
+        if name.startswith(prefix) and name.endswith(extension):
+            matched.append(path)
+    return sorted(matched)
+
+
 def converts_mp4(converts_file_path: str, is_original_delete: bool = True) -> None:
     try:
         if os.path.exists(converts_file_path) and os.path.getsize(converts_file_path) > 0:
+            if converts_file_path.rsplit('.', maxsplit=1)[0] + ".mp4" == converts_file_path:
+                return
             if converts_to_h264:
                 color_obj.print_colored("正在转码为MP4格式并重新编码为h264\n", color_obj.YELLOW)
                 ffmpeg_command = [
-                    "ffmpeg", "-i", converts_file_path,
+                    "ffmpeg", "-y", "-i", converts_file_path,
                     "-c:v", "libx264",
                     "-preset", "veryfast",
                     "-crf", "23",
@@ -233,7 +256,7 @@ def converts_mp4(converts_file_path: str, is_original_delete: bool = True) -> No
             else:
                 color_obj.print_colored("正在转码为MP4格式\n", color_obj.YELLOW)
                 ffmpeg_command = [
-                    "ffmpeg", "-i", converts_file_path,
+                    "ffmpeg", "-y", "-i", converts_file_path,
                     "-c:v", "copy",
                     "-c:a", "copy",
                     "-f", "mp4", converts_file_path.rsplit('.', maxsplit=1)[0] + ".mp4",
@@ -453,11 +476,8 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
     if return_code == 0:
         if converts_to_mp4 and save_type == 'TS':
             if split_video_by_time:
-                file_paths = utils.get_file_paths(os.path.dirname(save_file_path))
-                prefix = os.path.basename(save_file_path).rsplit('_', maxsplit=1)[0]
-                for path in file_paths:
-                    if prefix in path:
-                        threading.Thread(target=converts_mp4, args=(path, delete_origin_file)).start()
+                for path in get_segment_files(save_file_path):
+                    threading.Thread(target=converts_mp4, args=(path, delete_origin_file)).start()
             else:
                 threading.Thread(target=converts_mp4, args=(save_file_path, delete_origin_file)).start()
         print(f"\n{record_name} {stop_time} 直播录制完成\n")
@@ -1563,17 +1583,14 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                             )
                                             if comment_end:
                                                 if converts_to_mp4:
-                                                    file_paths = utils.get_file_paths(os.path.dirname(save_file_path))
-                                                    prefix = os.path.basename(save_file_path).rsplit('_', maxsplit=1)[0]
-                                                    for path in file_paths:
-                                                        if prefix in path:
-                                                            try:
-                                                                threading.Thread(
-                                                                    target=converts_mp4,
-                                                                    args=(path, delete_origin_file)
-                                                                ).start()
-                                                            except subprocess.CalledProcessError as e:
-                                                                logger.error(f"转码失败: {e} ")
+                                                    for path in get_segment_files(save_file_path):
+                                                        try:
+                                                            threading.Thread(
+                                                                target=converts_mp4,
+                                                                args=(path, delete_origin_file)
+                                                            ).start()
+                                                        except subprocess.CalledProcessError as e:
+                                                            logger.error(f"转码失败: {e} ")
                                                 return
 
                                         except subprocess.CalledProcessError as e:
