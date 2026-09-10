@@ -1158,7 +1158,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                               "KHTML, like Gecko) SamsungBrowser/14.2 Chrome/87.0.4280.141 Mobile "
                                               "Safari/537.36")
 
-                                rw_timeout = "15000000"
+                                rw_timeout = "30000000"
                                 analyzeduration = "20000000"
                                 probesize = "10000000"
                                 bufsize = "8000k"
@@ -1172,6 +1172,20 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                         max_muxing_queue_size = "2048"
                                         break
 
+                                # -reconnect* 是 http/https 协议的输入选项，必须放在 -i 之前。
+                                # 放在 -i 之后 ffmpeg 会静默忽略它们(不报错也不警告)，导致 CDN
+                                # 每次主动断开连接时 ffmpeg 直接退出，录制被切成大量碎片文件。
+                                reconnect_options = []
+                                if real_url.startswith(("http://", "https://")):
+                                    reconnect_options = [
+                                        "-reconnect", "1",
+                                        "-reconnect_streamed", "1",
+                                        "-reconnect_at_eof", "1",
+                                        "-reconnect_on_network_error", "1",
+                                        "-reconnect_on_http_error", "4xx,5xx",
+                                        "-reconnect_delay_max", "60",
+                                    ]
+
                                 ffmpeg_command = [
                                     'ffmpeg', "-y",
                                     "-v", "verbose",
@@ -1184,11 +1198,13 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                     "-analyzeduration", analyzeduration,
                                     "-probesize", probesize,
                                     "-fflags", "+discardcorrupt",
-                                    "-re", "-i", real_url,
+                                    *reconnect_options,
+                                    # 不要对直播流使用 -re: 它会把读取速率限制到"原生帧率"，
+                                    # 当推流端的时间戳比真实时间略快时读取会持续落后，
+                                    # 服务端缓冲被撑满后主动断开连接。
+                                    "-i", real_url,
                                     "-bufsize", bufsize,
                                     "-sn", "-dn",
-                                    "-reconnect_delay_max", "60",
-                                    "-reconnect_streamed", "-reconnect_at_eof",
                                     "-max_muxing_queue_size", max_muxing_queue_size,
                                     "-correct_ts_overflow", "1",
                                     "-avoid_negative_ts", "1"
