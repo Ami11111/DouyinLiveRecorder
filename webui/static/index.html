@@ -42,6 +42,7 @@
     <section class="view" data-view="rooms" hidden>
       <div class="toolbar">
         <input id="room-search" type="search" placeholder="搜索地址或主播名" autocomplete="off">
+        <label class="switch inline"><input id="room-group" type="checkbox" checked><span>按平台分组</span></label>
         <span class="spacer"></span>
         <button id="room-enable-all" class="btn" type="button">全部启用</button>
         <button id="room-disable-all" class="btn" type="button">全部停用</button>
@@ -96,7 +97,8 @@
     </label>
     <p class="err" id="room-dialog-err" hidden></p>
     <menu>
-      <button value="cancel" class="btn" type="submit">取消</button>
+      <!-- formnovalidate 必须有: 否则 url 的 required 会把"取消"也一起拦下, 关不掉 -->
+      <button value="cancel" class="btn" type="submit" formnovalidate>取消</button>
       <button value="ok" id="room-dialog-ok" class="btn primary" type="submit">保存</button>
     </menu>
   </form>

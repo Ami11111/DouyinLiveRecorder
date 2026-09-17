@@ -94,3 +94,54 @@ def is_known(url: str) -> bool:
     except Exception:
         return False
     return any(h in host or h in url for h in ALL_HOSTS)
+
+# ---------------------------------------------------------------- 平台识别
+# 片段 -> 显示名。片段抄自 main.py 里 `record_url.find("...") > -1` 的那条
+# if/elif 链(与 ALL_HOSTS 是两套东西: 那个用于判断"是不是已知平台",
+# 这个用于判断"是哪个平台")。上游新增平台后需人工对齐, 对不上只会显示成
+# "其他平台", 不影响任何功能。
+PLATFORM_RULES = (
+    ('douyin.com/', '抖音'), ('tiktok.com/', 'TikTok'),
+    ('live.kuaishou.com/', '快手'), ('huya.com/', '虎牙'), ('douyu.com/', '斗鱼'),
+    ('yy.com/', 'YY'), ('live.bilibili.com/', 'B站'),
+    ('xiaohongshu.com/', '小红书'), ('xhslink.com/', '小红书'),
+    ('bigo.tv/', 'Bigo'), ('slink.bigovideo.tv/', 'Bigo'),
+    ('app.blued.cn/', 'Blued'),
+    ('sooplive.co.kr/', 'SOOP'), ('sooplive.com/', 'SOOP'),
+    ('cc.163.com/', '网易CC'), ('look.163.com/', 'Look直播'),
+    ('qiandurebo.com/', '千度热播'), ('pandalive.co.kr/', 'PandaTV'),
+    ('fm.missevan.com/', '猫耳FM'), ('winktv.co.kr/', 'WinkTV'),
+    ('flextv.co.kr/', 'FlexTV'), ('ttinglive.com/', 'FlexTV'),
+    ('popkontv.com/', 'PopkonTV'), ('twitcasting.tv/', 'TwitCasting'),
+    ('live.baidu.com/', '百度'), ('weibo.com/', '微博'), ('kugou.com/', '酷狗'),
+    ('twitch.tv/', 'Twitch'), ('liveme.com/', 'LiveMe'),
+    ('huajiao.com/', '花椒'), ('7u66.com/', '流星'),
+    ('showroom-live.com/', 'SHOWROOM'),
+    ('live.acfun.cn/', 'AcFun'), ('m.acfun.cn/', 'AcFun'),
+    ('live.tlclw.com/', '畅聊'), ('ybw1666.com/', '音播'), ('inke.cn/', '映客'),
+    ('zhihu.com/', '知乎'), ('chzzk.naver.com/', 'CHZZK'),
+    ('haixiutv.com/', '嗨秀'), ('vvxqiu.com/', 'VV星球'),
+    ('17.live/', '17LIVE'), ('lang.live/', '浪Live'),
+    ('m.pp.weimipopo.com/', '漂漂'), ('.6.cn/', '六间房'),
+    ('lehaitv.com/', '乐嗨'), ('h.catshow168.com/', '花猫'),
+    ('live.shopee', 'Shopee'), ('shp.ee/', 'Shopee'),
+    ('youtube.com/', 'YouTube'), ('youtu.be/', 'YouTube'),
+    ('tb.cn', '淘宝'), ('m.jd.com', '京东'), ('3.cn', '京东'),
+    ('faceit.com/', 'FACEIT'), ('miguvideo.com', '咪咕'),
+    ('show.lailianjie.com', '连接'), ('imkktv.com', '来秀'),
+    ('picarto.tv', 'Picarto'),
+)
+
+# 长片段优先, 免得 '3.cn' 这种短片段抢走本该归别家的地址
+_SORTED_RULES = tuple(sorted(PLATFORM_RULES, key=lambda kv: -len(kv[0])))
+
+OTHER = '其他平台'
+
+
+def platform_of(url: str) -> str:
+    """返回直播间地址所属平台的显示名; 认不出来就是"其他平台"。"""
+    u = (url or '').casefold()
+    for frag, name in _SORTED_RULES:
+        if frag.casefold() in u:
+            return name
+    return OTHER

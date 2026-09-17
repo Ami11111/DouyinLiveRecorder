@@ -58,6 +58,7 @@ const S = {
   meta: null, fields: [], values: {}, edits: new Map(),
   rooms: [], roomsRev: null, roomsMeta: {}, status: null,
   tab: 'overview', search: '', pollTimer: null, pollMs: 0, tickTimer: null,
+  groupByPlatform: true,
   fails: 0, revealed: new Set(),
 };
 
@@ -67,6 +68,13 @@ const fmtBytes = (n) => {
   const u = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
   let i = 0; while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
   return (i >= 3 ? n.toFixed(1) : Math.round(n)) + ' ' + u[i];
+};
+// 卡片很窄, 长路径只保留首尾各一段, 完整路径挂在 title 上
+const shortPath = (p) => {
+  if (!p || p.length <= 28) return p;
+  const parts = p.split('/').filter(Boolean);
+  if (parts.length <= 2) return '…' + p.slice(-26);
+  return `/${parts[0]}/…/${parts[parts.length - 1]}`;
 };
 const fmtDur = (s) => {
   s = Math.max(0, Math.floor(s));
@@ -138,6 +146,16 @@ function wireChrome() {
   $('#room-enable-all').addEventListener('click', () => toggleAll(true));
   $('#room-disable-all').addEventListener('click', () => toggleAll(false));
   $('#room-search').addEventListener('input', (e) => { S.search = e.target.value.trim(); renderRooms(); });
+
+  let grouped = true;
+  try { grouped = localStorage.getItem('dlr-group') !== '0'; } catch (e) { /* 隐私模式 */ }
+  S.groupByPlatform = grouped;
+  $('#room-group').checked = grouped;
+  $('#room-group').addEventListener('change', (e) => {
+    S.groupByPlatform = e.target.checked;
+    try { localStorage.setItem('dlr-group', e.target.checked ? '1' : '0'); } catch (err) { /* 隐私模式 */ }
+    renderRooms();
+  });
   $('#log-refresh').addEventListener('click', refreshLogs);
 
   document.addEventListener('keydown', (e) => {
@@ -210,14 +228,21 @@ function renderOverview() {
     h('div', { class: 'k', text: k }), h('div', { class: 'v', text: v }),
     sub ? h('div', { class: 'sub', text: sub }) : null);
 
+  const diskSub = disk.exists === false
+    ? '保存路径不存在，录制会落到系统盘！'
+    : shortPath(disk.path || '');
+  const diskCard = card('磁盘剩余', disk.ok ? fmtBytes(disk.free) : '读取失败',
+    diskSub, disk.exists === false);
+  const subEl = diskCard.querySelector('.sub');
+  if (subEl) subEl.title = st.effective?.video_save_path || disk.path || '';   // 悬停看完整路径
+
   $('#stat-cards').replaceChildren(
     card('正在录制', String(rec.length), rec.length ? '' : '暂无'),
     card('监测中', String(st.monitoring ?? '—'), '个直播间'),
     card('并发线程数', String(eff.max_request ?? '启动中'), '程序动态调节'),
     card('瞬时错误数', String(st.error_count ?? '—'), (st.error_count || 0) >= 5 ? '偏高' : '',
       (st.error_count || 0) >= 5),
-    card('磁盘剩余', disk.ok ? fmtBytes(disk.free) : '读取失败',
-      disk.exists === false ? '保存路径不存在！' : (disk.path || ''), disk.exists === false),
+    diskCard,
   );
 
   if (!rec.length) {
@@ -281,6 +306,50 @@ async function refreshRooms() {
   renderRooms();
 }
 
+function roomRow(r) {
+  const tr = h('tr', { class: r.enabled ? '' : 'off', draggable: 'true', 'data-url': r.url });
+
+  tr.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', r.url); tr.style.opacity = '.4'; });
+  tr.addEventListener('dragend', () => { tr.style.opacity = ''; });
+  tr.addEventListener('dragover', e => { e.preventDefault(); tr.classList.add('dragover'); });
+  tr.addEventListener('dragleave', () => tr.classList.remove('dragover'));
+  tr.addEventListener('drop', e => {
+    e.preventDefault(); tr.classList.remove('dragover');
+    reorder(e.dataTransfer.getData('text/plain'), r.url);
+  });
+
+  const cb = h('input', {
+    type: 'checkbox', checked: r.enabled,
+    onchange: (e) => toggleRoom(r, e.target.checked, e.target),
+  });
+
+  const qsel = h('select', { onchange: (e) => updateRoom(r, { quality: e.target.value }) },
+    h('option', { value: '', selected: !r.quality }, `跟随全局（${S.roomsMeta.default_quality || '原画'}）`),
+    ...(S.roomsMeta.qualities || []).map(qv =>
+      h('option', { value: qv, selected: r.quality === qv }, qv)));
+
+  tr.append(
+    h('td', { class: 'grip', title: '拖动排序', text: '⠿' }),
+    h('td', null, cb),
+    h('td', null,
+      h('div', { class: 'url', text: r.url }),
+      h('div', { class: 'tags' },
+        // 停用的不显示任何运行状态; 启用且真的在录 -> 录制中; 否则 -> 监测中
+        !r.enabled ? null
+          : (r.recording ? h('span', { class: 'tag live', text: '● 录制中' })
+                         : h('span', { class: 'tag', text: '监测中' })),
+        r.skipped ? h('span', { class: 'tag warn', text: '本次运行已跳过，需重启程序' }) : null,
+        !r.known_platform ? h('span', { class: 'tag warn', text: '未知平台' }) : null)),
+    h('td', { text: r.name || '—' }),
+    h('td', null, qsel),
+    h('td', null,
+      h('button', { class: 'btn tiny', type: 'button', onclick: () => openRoomDialog(r) }, '编辑'),
+      ' ',
+      h('button', { class: 'btn tiny danger', type: 'button', onclick: () => removeRoom(r) }, '删除')),
+  );
+  return tr;
+}
+
 function renderRooms() {
   const q = S.search.toLowerCase();
   const list = S.rooms.filter(r => !q || r.url.toLowerCase().includes(q) || (r.name || '').toLowerCase().includes(q));
@@ -291,52 +360,34 @@ function renderRooms() {
     return;
   }
 
-  const rows = list.map(r => {
-    const tr = h('tr', { class: r.enabled ? '' : 'off', draggable: 'true', 'data-url': r.url });
+  const head = h('thead', null, h('tr', null,
+    ...['', '启用', '直播间地址', '主播', '清晰度', ''].map(t => h('th', { text: t }))));
 
-    tr.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', r.url); tr.style.opacity = '.4'; });
-    tr.addEventListener('dragend', () => { tr.style.opacity = ''; });
-    tr.addEventListener('dragover', e => { e.preventDefault(); tr.classList.add('dragover'); });
-    tr.addEventListener('dragleave', () => tr.classList.remove('dragover'));
-    tr.addEventListener('drop', e => {
-      e.preventDefault(); tr.classList.remove('dragover');
-      reorder(e.dataTransfer.getData('text/plain'), r.url);
+  let bodies;
+  if (S.groupByPlatform) {
+    // 按平台分组。顺序取"每个平台在文件里首次出现的位置", 不强行字典序,
+    // 这样用户自己在文件里的编排习惯还看得出来。
+    const groups = new Map();
+    for (const r of list) {
+      const p = r.platform || '其他平台';
+      if (!groups.has(p)) groups.set(p, []);
+      groups.get(p).push(r);
+    }
+    bodies = [...groups.entries()].map(([name, rows]) => {
+      const on = rows.filter(x => x.enabled).length;
+      const rec = rows.filter(x => x.enabled && x.recording).length;
+      const header = h('tr', { class: 'grp' }, h('td', { colspan: '6' },
+        name,
+        h('span', { class: 'cnt', text: `${rows.length} 个 · 启用 ${on}` }),
+        rec ? h('span', { class: 'rec', text: `● 录制中 ${rec}` }) : null));
+      return h('tbody', null, header, ...rows.map(roomRow));
     });
-
-    const cb = h('input', {
-      type: 'checkbox', checked: r.enabled,
-      onchange: (e) => toggleRoom(r, e.target.checked, e.target),
-    });
-
-    const qsel = h('select', { onchange: (e) => updateRoom(r, { quality: e.target.value }) },
-      h('option', { value: '', selected: !r.quality }, `跟随全局（${S.roomsMeta.default_quality || '原画'}）`),
-      ...(S.roomsMeta.qualities || []).map(qv =>
-        h('option', { value: qv, selected: r.quality === qv }, qv)));
-
-    tr.append(
-      h('td', { class: 'grip', title: '拖动排序', text: '⠿' }),
-      h('td', null, cb),
-      h('td', null,
-        h('div', { class: 'url', text: r.url }),
-        h('div', null,
-          r.running ? h('span', { class: 'tag live', text: '监测/录制中' }) : null,
-          r.skipped ? h('span', { class: 'tag warn', text: '本次运行已跳过，需重启程序' }) : null,
-          !r.known_platform ? h('span', { class: 'tag warn', text: '未知平台' }) : null)),
-      h('td', { text: r.name || '—' }),
-      h('td', null, qsel),
-      h('td', null,
-        h('button', { class: 'btn tiny', type: 'button', onclick: () => openRoomDialog(r) }, '编辑'),
-        ' ',
-        h('button', { class: 'btn tiny danger', type: 'button', onclick: () => removeRoom(r) }, '删除')),
-    );
-    return tr;
-  });
+  } else {
+    bodies = [h('tbody', null, ...list.map(roomRow))];
+  }
 
   wrap.replaceChildren(h('div', { class: 'tbl-scroll' },
-    h('table', { class: 'tbl' },
-      h('thead', null, h('tr', null, ...['', '启用', '直播间地址', '主播', '清晰度', '']
-        .map(t => h('th', { text: t })))),
-      h('tbody', null, ...rows))));
+    h('table', { class: 'tbl' }, head, ...bodies)));
 }
 
 async function roomOp(path, body, okMsg, sub) {
@@ -345,6 +396,7 @@ async function roomOp(path, body, okMsg, sub) {
     S.rooms = d.rooms; S.roomsRev = d.rev; S.roomsMeta = d;
     renderRooms();
     if (okMsg) toast(okMsg, d.warning ? 'warn' : 'ok', d.warning || sub);
+    poll().catch(() => {});      // 顺带刷新概览的录制数
     return true;
   } catch (e) {
     if (e.status === 409) {

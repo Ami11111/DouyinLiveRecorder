@@ -187,14 +187,27 @@ def h_rooms_get(ctx, req):
     st = _safe_status(ctx)
     running = set(st.get('running') or [])
     not_record = set(st.get('not_record') or [])
-    # recording 里的 key 是 "序号N 主播名", 没有 URL, 所以录制中状态按 running 判断
+
+    # main.py 的 recording 是一个 "序号N 主播名" 的集合, 里面没有 URL, 也没有任何
+    # 现成的 URL -> record_name 映射(record_name 在 main.py:1079 才拼出来, 而
+    # 序号 = 建线程时的 monitoring, running_list 一有删除序号就会错位, 不能用来反查)。
+    # 但 main.py:1088-1092 会自动把抓到的主播昵称写回 URL_config 的 "主播: xxx",
+    # 用的是同一个 clean_name(anchor_name), 所以拿主播名匹配是可靠的。
+    # 同名主播会一起被标成录制中, 属于可接受的边缘情况。
+    recording_names = set()
+    for item in (st.get('recording') or []):
+        name = str(item.get('name', ''))
+        recording_names.add(name.split(' ', 1)[1] if ' ' in name else name)
+
     items = []
     for r in rooms:
         if r.kind != 'room':
             continue
         d = r.to_json()
         d['known_platform'] = platforms.is_known(r.url)
+        d['platform'] = platforms.platform_of(r.url)
         d['running'] = r.url in running
+        d['recording'] = bool(r.enabled and r.name and r.name in recording_names)
         d['skipped'] = r.url in not_record
         items.append(d)
     return 200, {'rev': rev, 'rooms': items,
