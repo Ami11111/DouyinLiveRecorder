@@ -1798,12 +1798,45 @@ try:
         }
 
 
+    def _webui_shutdown(wait_seconds: int = 120) -> dict:
+        """从界面退出程序。
+
+        走的是上游磁盘不足时那条路(main.py:2016): 先把 exit_recording 置 True,
+        check_subprocess 的轮询(main.py:460)就会给每个 ffmpeg 发 SIGINT 并
+        process.wait(), 文件带着完整尾部正常落盘 —— 绝不是 kill。
+        等 recording 清空后再退进程; 录制线程都是 daemon, 不会拖住退出。
+        """
+        global exit_recording
+        exit_recording = True
+        pending = len(recording)
+        logger.info(f"收到界面的退出请求, 正在等待 {pending} 个录制收尾")
+
+        def _wait_then_exit():
+            deadline = time.time() + max(0, wait_seconds)
+            while recording and time.time() < deadline:
+                time.sleep(0.5)
+            if recording:
+                logger.warning(f"等待超时, 仍有 {len(recording)} 个录制未结束, 继续退出")
+            time.sleep(1.0)          # 给 converts_mp4 等收尾线程一点时间
+            try:
+                # 交给已注册的 signal_handler(main.py:83) 在主线程里 sys.exit(0),
+                # 比从子线程调 sys.exit 干净(后者只会结束这一个线程)
+                os.kill(os.getpid(), signal.SIGTERM)
+            except Exception:
+                pass
+            time.sleep(3)
+            os._exit(0)              # 兜底: 主线程若卡在某处就硬退
+
+        threading.Thread(target=_wait_then_exit, name='webui-exit', daemon=True).start()
+        return {'pending': pending, 'wait_seconds': wait_seconds}
+
+
     start_webui(config_file=config_file, url_config_file=url_config_file,
                 backup_dir=backup_dir, default_path=default_path,
                 text_encoding=text_encoding,
                 url_file_lock=file_update_lock,   # 必须与 update_file/delete_line 共用
                 backup_file=backup_file,          # 复用现成的备份函数
-                get_status=_webui_status, version=version)
+                get_status=_webui_status, shutdown=_webui_shutdown, version=version)
 except Exception as _webui_err:                   # 界面出任何问题都不能影响录制
     logger.error(f"WebUI 启动失败(不影响录制): {_webui_err}")
 # ==================== WebUI end ====================

@@ -51,6 +51,7 @@ class Ctx:
     url_file_lock: object = None
     backup_file: object = None
     get_status: object = None
+    shutdown: object = None
     version: str = ''
     host: str = '127.0.0.1'
     port: int = 8787
@@ -308,7 +309,7 @@ def _bind(host: str, port: int, handler):
 
 def start_webui(config_file, url_config_file, backup_dir, default_path,
                 text_encoding='utf-8-sig', url_file_lock=None, backup_file=None,
-                get_status=None, version=''):
+                get_status=None, shutdown=None, version=''):
     """在后台线程里起 HTTP 服务。任何异常都不应影响录制, 调用方已包了 try。"""
 
     # 先把自己的配置项补进 config.ini —— 必须走我们自己的写入器。
@@ -359,6 +360,7 @@ def start_webui(config_file, url_config_file, backup_dir, default_path,
               backup_dir=backup_dir, default_path=default_path,
               text_encoding=text_encoding, url_file_lock=url_file_lock or threading.Lock(),
               backup_file=backup_file, get_status=get_status or (lambda: {}),
+              shutdown=shutdown,
               version=version, host=host, port=port, token=token,
               lan_mode=lan_mode, lan_lock_script=lan_lock_script,
               allowed_hosts=allowed)

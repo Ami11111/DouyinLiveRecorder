@@ -47,6 +47,7 @@ def h_meta(ctx, req):
         'token_required': bool(ctx.token),
         'is_lan_request': req.is_lan,
         'lan_lock_script': ctx.lan_lock_script,
+        'can_shutdown': callable(ctx.shutdown),
         'readonly_keys': ([list(k) for k in S.LAN_READONLY_KEYS]
                           if (req.is_lan and ctx.lan_lock_script) else []),
         'disk': _disk(save_path),
@@ -348,6 +349,25 @@ def h_restore(ctx, req):
     return 200, {'restored': name, 'target': os.path.basename(dst)}
 
 
+def h_shutdown(ctx, req):
+    """退出录制程序。
+
+    不是 kill: 底层把 main.py 的 exit_recording 置 True, 由 check_subprocess
+    给每个 ffmpeg 发 SIGINT 并 wait(), 文件带完整尾部落盘后进程才退出。
+    """
+    if not callable(ctx.shutdown):
+        raise ApiError(501, '这个版本的主程序不支持从界面退出, 请在终端按 Ctrl+C')
+    try:
+        wait = int((req.json or {}).get('wait_seconds', 120))
+    except (TypeError, ValueError):
+        wait = 120
+    wait = max(0, min(wait, 600))
+    st = _safe_status(ctx)
+    info = ctx.shutdown(wait) or {}
+    return 200, {'ok': True, 'pending': info.get('pending', len(st.get('recording') or [])),
+                 'wait_seconds': wait}
+
+
 ROUTES = {
     ('GET', '/api/meta'): h_meta,
     ('GET', '/api/status'): h_status,
@@ -365,4 +385,5 @@ ROUTES = {
     ('GET', '/api/logs'): h_logs,
     ('GET', '/api/backups'): h_backups,
     ('POST', '/api/restore'): h_restore,
+    ('POST', '/api/shutdown'): h_shutdown,
 }

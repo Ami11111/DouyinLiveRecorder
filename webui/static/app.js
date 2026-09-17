@@ -107,6 +107,7 @@ async function init() {
   $('#boot').hidden = true;
   $('#app').hidden = false;
   $('#version').textContent = S.meta.version || '';
+  $('#quit-btn').hidden = S.meta.can_shutdown === false;
 
   buildTabs();
   wireChrome();
@@ -157,12 +158,13 @@ function wireChrome() {
     renderRooms();
   });
   $('#log-refresh').addEventListener('click', refreshLogs);
+  $('#quit-btn').addEventListener('click', quitProgram);
 
   document.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); if (S.edits.size) save(); }
   });
   window.addEventListener('beforeunload', (e) => {
-    if (S.edits.size) { e.preventDefault(); e.returnValue = ''; }
+    if (S.edits.size && $('#quit-overlay').hidden) { e.preventDefault(); e.returnValue = ''; }
   });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) stopPolling(); else { poll(); startPolling(); }
@@ -176,6 +178,97 @@ function cycleTheme() {
   else document.documentElement.dataset.theme = next;
   try { localStorage.setItem('dlr-theme', next); } catch (e) { /* 隐私模式 */ }
   toast({ auto: '主题：跟随系统', light: '主题：浅色', dark: '主题：深色' }[next]);
+}
+
+/* ================================================================ 退出 */
+
+const WAIT_SECONDS = 120;
+
+async function quitProgram() {
+  const rec = (S.status && S.status.recording) || [];
+  const lines = ['确定要停止录制并退出程序吗？', ''];
+  if (S.edits.size) {
+    lines.push(`⚠ 还有 ${S.edits.size} 项配置改动没有保存，退出后会丢失。`);
+    lines.push('');
+  }
+  if (rec.length) {
+    lines.push(`当前有 ${rec.length} 个直播正在录制：`);
+    for (const r of rec.slice(0, 6)) lines.push(`  · ${r.name}  已录 ${fmtDur(r.elapsed)}`);
+    if (rec.length > 6) lines.push(`  · 还有 ${rec.length - 6} 个…`);
+    lines.push('');
+    lines.push('程序会先让 ffmpeg 正常收尾再退出，文件不会损坏，');
+    lines.push(`但可能要等一会儿（最多 ${WAIT_SECONDS} 秒）。`);
+  } else {
+    lines.push('当前没有正在进行的录制，会立刻退出。');
+  }
+  if (!confirm(lines.join('\n'))) return;
+
+  stopPolling();
+  clearInterval(S.tickTimer);
+  showQuit(rec.length);
+
+  try {
+    await api('/api/shutdown', { wait_seconds: WAIT_SECONDS });
+  } catch (e) {
+    // 501 = 主程序版本不支持; 其余多半是进程已经先一步退出了
+    if (e.status === 501) {
+      hideQuit();
+      startPolling();
+      return toast(e.message, 'err', '可以在运行程序的终端里按 Ctrl+C');
+    }
+  }
+  await waitUntilGone();
+}
+
+function showQuit(pending) {
+  $('#quit-overlay').hidden = false;
+  $('#quit-spinner').classList.remove('done');
+  $('#quit-title').textContent = '正在退出…';
+  $('#quit-msg').textContent = pending
+    ? `正在等待 ${pending} 个录制收尾。ffmpeg 会收到正常的停止信号，文件带完整索引落盘后程序才退出。`
+    : '正在停止录制程序…';
+  $('#quit-hint').textContent = '请不要直接关掉这个页面，等它变成"已退出"再关。';
+}
+
+function hideQuit() { $('#quit-overlay').hidden = true; }
+
+async function waitUntilGone() {
+  const deadline = Date.now() + (WAIT_SECONDS + 30) * 1000;
+  let gone = 0;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 1000));
+    let alive = true, left = null;
+    try {
+      const st = await api('/api/status');
+      left = (st.recording || []).length;
+    } catch (e) { alive = false; }
+    if (alive) {
+      gone = 0;
+      if (left !== null) {
+        $('#quit-msg').textContent = left
+          ? `还有 ${left} 个录制正在收尾，请稍候…`
+          : '录制已全部停止，正在退出进程…';
+      }
+    } else if (++gone >= 2) {          // 连续两次连不上才认定已退出, 避免误报
+      return quitDone();
+    }
+  }
+  $('#quit-title').textContent = '退出可能没有完成';
+  $('#quit-spinner').classList.add('done');
+  $('#quit-msg').textContent = '等待超时，程序可能仍在运行。请到运行它的终端里按 Ctrl+C 确认。';
+  $('#quit-hint').textContent = '';
+}
+
+function quitDone() {
+  $('#quit-spinner').classList.add('done');
+  $('#quit-title').textContent = '录制程序已退出';
+  $('#quit-msg').textContent = '正在录的文件都已正常保存。';
+  document.title = '已退出 · 录制管理台';
+  $('#quit-hint').textContent = '';          // 先清掉"别关页面"那句, 它已经不适用了
+  // 只有脚本自己开的窗口才关得掉, 普通标签页多半会被浏览器拒绝 —— 所以补一句文字提示。
+  // 关掉了的话这句话也没人看得到, 无所谓。
+  try { window.close(); } catch (e) { /* 浏览器不允许 */ }
+  setTimeout(() => { $('#quit-hint').textContent = '可以关闭这个页面了。'; }, 400);
 }
 
 /* ================================================================ 概览 */

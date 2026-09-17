@@ -23,6 +23,7 @@
     <div class="topbar-right">
       <span id="conn" class="conn"></span>
       <button id="theme-btn" class="icon-btn" type="button" title="切换主题">主题</button>
+      <button id="quit-btn" class="icon-btn danger" type="button" title="停止录制并退出程序">退出</button>
     </div>
   </header>
 
@@ -81,6 +82,15 @@
   </div>
 
   <div id="toasts" class="toasts" aria-live="polite"></div>
+</div>
+
+<div id="quit-overlay" class="overlay" hidden>
+  <div class="overlay-box">
+    <div class="spinner" id="quit-spinner"></div>
+    <h2 id="quit-title">正在退出…</h2>
+    <p id="quit-msg" class="hint"></p>
+    <p id="quit-hint" class="hint small"></p>
+  </div>
 </div>
 
 <dialog id="room-dialog">
