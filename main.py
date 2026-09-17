@@ -1760,6 +1760,54 @@ t3 = threading.Thread(target=backup_file_start, args=(), daemon=True)
 t3.start()
 utils.remove_duplicate_lines(url_config_file)
 
+# ==================== WebUI (fork 新增, 上游没有这一段) ====================
+# 本地网页管理界面。放在这里的理由: ffmpeg 检查已过, 但下面那个耗时约 15 秒的
+# 代理探测和主循环都还没开始 —— 界面秒开, 而且万一配置文件坏掉导致主循环报错,
+# 界面仍然活着, 可以用它把配置改回来。
+# 同步上游时整段保留即可, 与上游代码没有任何耦合。
+try:
+    from webui.server import start_webui
+
+
+    def _webui_status() -> dict:
+        """供 webui 读取的进程内实时状态快照。只读模块级全局变量, 不加锁, 不做 IO。"""
+        g = globals()
+        now = datetime.datetime.now()
+        items = []
+        for _name in list(recording):                 # 对 set 取快照
+            _rt = recording_time_list.get(_name)      # 用 .get 兜住 KeyError 竞态
+            if not _rt:
+                continue
+            _start, _qa = _rt
+            items.append({'name': _name, 'quality': _qa,
+                          'start_at': _start.strftime('%Y-%m-%d %H:%M:%S'),
+                          'elapsed': int((now - _start).total_seconds())})
+        items.sort(key=lambda x: x['elapsed'], reverse=True)
+        return {
+            'now': now.strftime('%Y-%m-%d %H:%M:%S'),
+            'monitoring': monitoring, 'running': list(running_list),
+            'commented': list(url_comments), 'not_record': list(not_record_list),
+            'error_count': error_count, 'exit_recording': exit_recording,
+            'recording': items,
+            # 运行期真实生效值, 可能与配置文件里的不一致(平台强制改写、
+            # adjust_max_request 动态调节等)。这些名字要到主循环第一轮才创建,
+            # 所以用 globals().get 取, 取不到时前端显示"启动中"。
+            'effective': {k: g.get(k) for k in (
+                'max_request', 'use_proxy', 'video_save_type', 'video_record_quality',
+                'split_video_by_time', 'split_time', 'delay_default', 'video_save_path')},
+        }
+
+
+    start_webui(config_file=config_file, url_config_file=url_config_file,
+                backup_dir=backup_dir, default_path=default_path,
+                text_encoding=text_encoding,
+                url_file_lock=file_update_lock,   # 必须与 update_file/delete_line 共用
+                backup_file=backup_file,          # 复用现成的备份函数
+                get_status=_webui_status, version=version)
+except Exception as _webui_err:                   # 界面出任何问题都不能影响录制
+    logger.error(f"WebUI 启动失败(不影响录制): {_webui_err}")
+# ==================== WebUI end ====================
+
 
 def read_config_value(config_parser: configparser.RawConfigParser, section: str, option: str, default_value: Any) \
         -> Any:
