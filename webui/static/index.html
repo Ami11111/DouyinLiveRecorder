@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>录制管理台</title>
+<link rel="stylesheet" href="/app.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%23e5484d'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%23fff'/%3E%3C/svg%3E">
+<script src="/app.js"></script>
+</head>
+<body>
+
+<div id="boot" class="boot">正在连接录制程序…</div>
+
+<div id="app" hidden>
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot" id="live-dot" aria-hidden="true"></span>
+      <strong>录制管理台</strong>
+      <span class="muted" id="version"></span>
+    </div>
+    <div class="topbar-right">
+      <span id="conn" class="conn"></span>
+      <button id="theme-btn" class="icon-btn" type="button" title="切换主题">主题</button>
+    </div>
+  </header>
+
+  <nav class="tabs" id="tabs" role="tablist"></nav>
+
+  <main id="views">
+    <section class="view" data-view="overview">
+      <div class="cards" id="stat-cards"></div>
+      <h2>正在录制</h2>
+      <div id="recording-wrap"></div>
+      <h2>运行期真实生效值</h2>
+      <p class="hint">这些是录制程序此刻实际在用的值。配置文件里改过但还没轮到生效、
+        或被平台规则强制改写时，会和"录制设置"里显示的不一样。</p>
+      <div class="cards small" id="effective-cards"></div>
+    </section>
+
+    <section class="view" data-view="rooms" hidden>
+      <div class="toolbar">
+        <input id="room-search" type="search" placeholder="搜索地址或主播名" autocomplete="off">
+        <span class="spacer"></span>
+        <button id="room-enable-all" class="btn" type="button">全部启用</button>
+        <button id="room-disable-all" class="btn" type="button">全部停用</button>
+        <button id="room-add-btn" class="btn primary" type="button">新增直播间</button>
+      </div>
+      <p class="hint">停用某个直播间时，程序会给 ffmpeg 发送优雅停止信号，当前正在录的文件会正常保存，
+        不会损坏。最长约 4 秒生效。拖动左侧手柄可以排序。</p>
+      <div id="rooms-wrap"></div>
+    </section>
+
+    <section class="view" data-view="record" hidden><div class="form" id="form-record"></div></section>
+    <section class="view" data-view="push" hidden><div class="form" id="form-push"></div></section>
+    <section class="view" data-view="creds" hidden>
+      <p class="hint">所有凭据默认遮蔽显示。点"显示"才会单独拉取某一项的明文 ——
+        这样一次误操作的截图或录屏不会把全部账号一起泄露出去。</p>
+      <div class="form" id="form-creds"></div>
+    </section>
+    <section class="view" data-view="webui" hidden>
+      <div class="form" id="form-webui"></div>
+      <div id="lan-card"></div>
+      <h2>配置备份</h2>
+      <p class="hint">录制程序每 10 分钟检查一次配置文件，有变化就自动备份，各保留最近 6 份。
+        本界面每次保存前也会备份一次。</p>
+      <div id="backups-wrap"></div>
+      <h2>运行日志</h2>
+      <div class="toolbar"><button id="log-refresh" class="btn" type="button">刷新日志</button></div>
+      <pre id="log-box" class="logbox"></pre>
+    </section>
+  </main>
+
+  <div id="dirtybar" class="dirtybar" hidden>
+    <span id="dirty-count"></span>
+    <span class="spacer"></span>
+    <button id="discard-btn" class="btn" type="button">放弃修改</button>
+    <button id="save-btn" class="btn primary" type="button">保存</button>
+  </div>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+</div>
+
+<dialog id="room-dialog">
+  <form method="dialog" id="room-form">
+    <h3 id="room-dialog-title">新增直播间</h3>
+    <label>直播间地址
+      <input name="url" type="url" required placeholder="https://live.bilibili.com/13957768" autocomplete="off">
+    </label>
+    <label>主播名 <span class="muted">（可留空，程序抓到昵称后会自动补上）</span>
+      <input name="name" type="text" placeholder="例：ya妖精-朱鹮" autocomplete="off">
+    </label>
+    <label>清晰度
+      <select name="quality"></select>
+    </label>
+    <p class="err" id="room-dialog-err" hidden></p>
+    <menu>
+      <button value="cancel" class="btn" type="submit">取消</button>
+      <button value="ok" id="room-dialog-ok" class="btn primary" type="submit">保存</button>
+    </menu>
+  </form>
+</dialog>
+
+</body>
+</html>
