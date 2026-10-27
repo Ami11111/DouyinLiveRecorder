@@ -26,7 +26,7 @@ import execjs
 import urllib.request
 from . import JS_SCRIPT_PATH, utils
 from .utils import trace_error_decorator, generate_random_string
-from .logger import script_path
+from .logger import script_path, logger
 from .room import get_sec_user_id, get_unique_id, UnsupportedUrlError
 from .http_clients.async_http import async_req
 from .ab_sign import ab_sign
@@ -703,6 +703,92 @@ async def get_bilibili_room_info(url: str, proxy_addr: OptionalStr = None, cooki
         return {"anchor_name": '', "live_status": False, "room_url": url}
 
 
+# qn: 30000=杜比 20000=4K 10000=原画 400=蓝光 250=超清 150=高清 80=流畅
+bilibili_qn_desc = {30000: '杜比', 20000: '4K', 10000: '原画', 400: '蓝光', 250: '超清', 150: '高清', 80: '流畅'}
+
+
+async def get_bilibili_room_play_info(room_id: str, qn: int, proxy_addr: OptionalStr, headers: dict) -> OptionalDict:
+    params = {
+        "room_id": room_id,
+        "protocol": "0,1",
+        "format": "0,1,2",
+        "codec": "0,1,2",
+        "qn": qn,
+        "platform": "web",
+        "ptype": "8",
+        "dolby": "5",
+        "panorama": "1",
+        "hdr_type": "0,1"
+    }
+    api = f'https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?{urllib.parse.urlencode(params)}'
+    json_str = await async_req(api, proxy_addr=proxy_addr, headers=headers)
+    json_data = json.loads(json_str)
+    if not json_data or json_data.get('code') != 0 or not json_data.get('data'):
+        return None
+    return json_data
+
+
+def select_bilibili_stream(play_info: dict, target_qn: int) -> OptionalDict:
+    """从 getRoomPlayInfo 的结果里挑一路流, 优先取不超过 target_qn 的最高画质"""
+    playurl = (play_info['data'].get('playurl_info') or {}).get('playurl')
+    if not playurl:
+        return None
+
+    protocol_rank = {'http_stream': 0, 'http_hls': 1}
+    format_rank = {'flv': 0, 'fmp4': 1, 'ts': 2}
+    codec_rank = {'avc': 0, 'hevc': 1, 'av1': 2}
+
+    candidates = []
+    for stream in playurl.get('stream') or []:
+        protocol_name = stream.get('protocol_name', '')
+        for stream_format in stream.get('format') or []:
+            format_name = stream_format.get('format_name', '')
+            for codec in stream_format.get('codec') or []:
+                url_info = codec.get('url_info') or []
+                if not url_info or not codec.get('base_url'):
+                    continue
+                # 与旧接口保持一致, 优先选 gotcha 线路
+                node = next((i for i in url_info if 'd1--cn-gotcha' in i.get('host', '')), url_info[0])
+                codec_name = codec.get('codec_name', '')
+                current_qn = codec.get('current_qn') or 0
+                candidates.append({
+                    'url': node['host'] + codec['base_url'] + node.get('extra', ''),
+                    'current_qn': current_qn,
+                    'accept_qn': codec.get('accept_qn') or [current_qn],
+                    'rank': (
+                        # av1 封进 ts 会被 ffmpeg 当作私有流, 录出来没有视频轨, 只能垫底
+                        0 if codec_name in ('avc', 'hevc') else 1,
+                        (0, -current_qn) if current_qn <= target_qn else (1, current_qn),
+                        protocol_rank.get(protocol_name, 9),
+                        format_rank.get(format_name, 9),
+                        codec_rank.get(codec_name, 9),
+                    ),
+                })
+
+    if not candidates:
+        return None
+    return min(candidates, key=itemgetter('rank'))
+
+
+async def get_bilibili_stream_data_legacy(room_id: str, qn: str, platform: str, proxy_addr: OptionalStr,
+                                          headers: dict) -> OptionalStr:
+    """老接口, 画质被限制在超清(720p), 只作为新接口失败时的兜底"""
+    params = {
+        'cid': room_id,
+        'qn': qn,
+        'platform': platform,
+    }
+    play_api = f'https://api.live.bilibili.com/room/v1/Room/playUrl?{urllib.parse.urlencode(params)}'
+    json_str = await async_req(play_api, proxy_addr=proxy_addr, headers=headers)
+    json_data = json.loads(json_str)
+    if json_data and json_data.get('code') == 0 and (json_data.get('data') or {}).get('durl'):
+        for i in json_data['data']['durl']:
+            if 'd1--cn-gotcha' in i['url']:
+                return i['url']
+        return json_data['data']['durl'][-1]['url']
+    return None
+
+
 @trace_error_decorator
 async def get_bilibili_stream_data(url: str, qn: str = '10000', platform: str = 'web', proxy_addr: OptionalStr = None,
                              cookies: OptionalStr = None) -> OptionalStr:
@@ -716,54 +802,38 @@ async def get_bilibili_stream_data(url: str, qn: str = '10000', platform: str = 
         headers['Cookie'] = cookies
 
     room_id = url.split('?')[0].rsplit('/', maxsplit=1)[1]
-    params = {
-        'cid': room_id,
-        'qn': qn,
-        'platform': platform,
-    }
-    play_api = f'https://api.live.bilibili.com/room/v1/Room/playUrl?{urllib.parse.urlencode(params)}'
-    json_str = await async_req(play_api, proxy_addr=proxy_addr, headers=headers)
-    json_data = json.loads(json_str)
-    if json_data and json_data['code'] == 0:
-        for i in json_data['data']['durl']:
-            if 'd1--cn-gotcha' in i['url']:
-                return i['url']
-        return json_data['data']['durl'][-1]['url']
-    else:
-        params = {
-            "room_id": room_id,
-            "protocol": "0,1",
-            "format": "0,1,2",
-            "codec": "0,1,2",
-            "qn": qn,
-            "platform": "web",
-            "ptype": "8",
-            "dolby": "5",
-            "panorama": "1",
-            "hdr_type": "0,1"
-        }
+    target_qn = int(qn)
 
-        # 此接口因网页上有限制, 需要配置登录后的cookie才能获取最高画质
-        api = f'https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?{urllib.parse.urlencode(params)}'
-        json_str = await async_req(api, proxy_addr=proxy_addr, headers=headers)
-        json_data = json.loads(json_str)
-        if json_data['data']['live_status'] == 0:
-            print("The anchor did not start broadcasting.")
-            return
-        playurl_info = json_data['data']['playurl_info']
-        format_list = playurl_info['playurl']['stream'][0]['format']
-        stream_data_list = format_list[0]['codec']
-        sorted_stream_list = sorted(stream_data_list, key=itemgetter("current_qn"), reverse=True)
-        # qn: 30000=杜比 20000=4K 10000=原画 400=蓝光 250=超清 150=高清 80=流畅
-        video_quality_options = {'10000': 0, '400': 1, '250': 2, '150': 3, '80': 4}
-        qn_count = len(sorted_stream_list)
-        select_stream_index = min(video_quality_options[qn], qn_count - 1)
-        stream_data: dict = sorted_stream_list[select_stream_index]
-        base_url = stream_data['base_url']
-        host = stream_data['url_info'][0]['host']
-        extra = stream_data['url_info'][0]['extra']
-        m3u8_url = host + base_url + extra
-        return m3u8_url
+    # 老的 playUrl 接口只会下发超清(720p), 所以先走能拿到原画的 getRoomPlayInfo 接口
+    play_info = await get_bilibili_room_play_info(room_id, target_qn, proxy_addr, headers)
+    if not play_info:
+        return await get_bilibili_stream_data_legacy(room_id, qn, platform, proxy_addr, headers)
+
+    if play_info['data'].get('live_status') != 1:
+        print("The anchor did not start broadcasting.")
+        return None
+
+    stream_data = select_bilibili_stream(play_info, target_qn)
+    if not stream_data:
+        return await get_bilibili_stream_data_legacy(room_id, qn, platform, proxy_addr, headers)
+
+    # 接口常常忽略请求里的 qn 直接下发默认画质, 这时按 accept_qn 里实际可用的最高画质再请求一次
+    available_qn = [i for i in stream_data['accept_qn'] if i <= target_qn]
+    best_qn = max(available_qn) if available_qn else stream_data['current_qn']
+    if best_qn > stream_data['current_qn']:
+        retry_info = await get_bilibili_room_play_info(room_id, best_qn, proxy_addr, headers)
+        retry_data = select_bilibili_stream(retry_info, target_qn) if retry_info else None
+        if retry_data and retry_data['current_qn'] > stream_data['current_qn']:
+            stream_data = retry_data
+
+    if stream_data['current_qn'] < best_qn:
+        # 原画及以上画质 B站 只对登录用户开放, 未配置 cookie 会被降到超清(720p)
+        logger.warning(
+            f"B站直播间 {room_id} 请求画质 {bilibili_qn_desc.get(best_qn, best_qn)}, "
+            f"实际只拿到 {bilibili_qn_desc.get(stream_data['current_qn'], stream_data['current_qn'])}, "
+            f"请在 config.ini 的 [Cookie] 里填写登录后的 b站cookie(至少包含 SESSDATA)"
+        )
+    return stream_data['url']
 
 @trace_error_decorator
 async def get_xhs_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:

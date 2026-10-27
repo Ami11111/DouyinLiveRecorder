@@ -259,6 +259,12 @@ COOKIE_LABEL = {
 COOKIE_TOP = ('抖音cookie', 'b站cookie', '快手cookie', '虎牙cookie', '斗鱼cookie', '小红书cookie')
 
 
+COOKIE_HELP = {
+    '抖音cookie': '录制抖音必填',
+    'b站cookie': '录制原画(1080P 及以上)必填, 未登录时 B 站只给 720P, 需含 SESSDATA',
+}
+
+
 def cookie_fields(keys_in_file) -> list:
     """按文件里实际存在的 key 生成 Cookie 字段, 未知 key 也照样生成(不隐藏任何东西)。"""
     top_cf = {k.casefold() for k in COOKIE_TOP}
@@ -271,7 +277,7 @@ def cookie_fields(keys_in_file) -> list:
                          group='常用平台' if k.casefold() in top_cf else '其他平台',
                          secret=True,
                          placeholder='粘贴浏览器 F12 里的完整 Cookie',
-                         help='录制抖音必填' if k.casefold() == '抖音cookie' else ''))
+                         help=COOKIE_HELP.get(k.casefold(), '')))
     return out
 
 
